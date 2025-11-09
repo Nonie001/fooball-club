@@ -17,15 +17,28 @@ export default function AdminDashboard() {
   const [leagueStatus, setLeagueStatus] = useState<'closed' | 'open'>('closed');
   const [loading, setLoading] = useState(true);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [supabaseConfigured, setSupabaseConfigured] = useState(true);
+
+  // Check if Supabase is configured
+  const checkSupabaseConfig = () => {
+    const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    const configured = url && key && !url.includes('placeholder') && !key.includes('placeholder');
+    setSupabaseConfigured(!!configured);
+    return !!configured;
+  };
 
   // Check authentication และโหลดข้อมูล
   useEffect(() => {
     const isAdmin = localStorage.getItem('isAdmin');
-    if (!isAdmin) {
+    if (!isAdmin && typeof window !== 'undefined') {
       router.push('/admin/login');
       return;
     }
 
+    // Check Supabase configuration
+    const configured = checkSupabaseConfig();
+    
     // โหลดสถานะลีก
     const savedLeagueStatus = localStorage.getItem('leagueStatus');
     if (savedLeagueStatus) {
@@ -35,11 +48,20 @@ export default function AdminDashboard() {
       localStorage.setItem('leagueStatus', 'closed');
     }
 
-    // โหลดข้อมูลจาก Supabase
-    loadData();
+    // โหลดข้อมูลจาก Supabase (เฉพาะเมื่อ configured)
+    if (configured) {
+      loadData();
+    } else {
+      setLoading(false);
+    }
   }, [router]);
 
   const loadData = async () => {
+    if (!checkSupabaseConfig()) {
+      setLoading(false);
+      return;
+    }
+
     try {
       setLoading(true);
       const [loadedTeams, loadedMatches] = await Promise.all([
@@ -295,7 +317,7 @@ export default function AdminDashboard() {
           )
         )}
       </main>
-        </>
+      </>
       )}
     </div>
   );
@@ -311,13 +333,22 @@ function SeasonManager({ teams, matches, setTeams, setMatches, leagueStatus, set
   setLeagueStatus: (status: 'closed' | 'open') => void;
 }) {
   const [seasons, setSeasons] = useState<Season[]>([]);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const savedSeasons = localStorage.getItem('seasonHistory');
-    if (savedSeasons) {
-      setSeasons(JSON.parse(savedSeasons));
-    }
+    loadSeasons();
   }, []);
+
+  const loadSeasons = async () => {
+    try {
+      const loadedSeasons = await seasonsDb.getAll();
+      setSeasons(loadedSeasons);
+    } catch (error) {
+      console.error('Error loading seasons:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   // คำนวณตารางคะแนน
   const calculateStandings = (baseTeams: Team[], finishedMatches: Match[]) => {
@@ -394,50 +425,52 @@ function SeasonManager({ teams, matches, setTeams, setMatches, leagueStatus, set
       return;
     }
 
-    // คำนวณตารางคะแนนสุดท้าย
-    const standings = calculateStandings(teams, matches);
-
-    // ดึงข้อมูล event settings
-    const eventSettingsStr = localStorage.getItem('eventSettings');
-    const eventSettings = eventSettingsStr ? JSON.parse(eventSettingsStr) : null;
-
-    // สร้าง Season object
-    const newSeason: Season = {
-      id: Date.now().toString(),
-      name: eventSettings?.eventName || 'Brotherhood FC',
-      eventDate: eventSettings?.eventDate || new Date().toISOString().split('T')[0],
-      createdAt: new Date().toISOString(),
-      closedAt: new Date().toISOString(),
-      status: 'closed',
-      teams: JSON.parse(JSON.stringify(teams)),
-      matches: JSON.parse(JSON.stringify(matches)),
-      standings: standings,
-    };
-
-    // บันทึกลง seasonHistory
-    const updatedSeasons = [newSeason, ...seasons];
-    localStorage.setItem('seasonHistory', JSON.stringify(updatedSeasons));
-    setSeasons(updatedSeasons);
-
-    // รีเซ็ตข้อมูลปัจจุบัน - ลบแมตช์ทั้งหมดจาก Supabase
     try {
+      // คำนวณตารางคะแนนสุดท้าย
+      const standings = calculateStandings(teams, matches);
+
+      // ดึงข้อมูล event settings
+      const eventSettingsStr = localStorage.getItem('eventSettings');
+      const eventSettings = eventSettingsStr ? JSON.parse(eventSettingsStr) : null;
+
+      // สร้าง Season object
+      const newSeason: Season = {
+        id: Date.now().toString(),
+        name: eventSettings?.eventName || 'Brotherhood FC',
+        eventDate: eventSettings?.eventDate || new Date().toISOString().split('T')[0],
+        createdAt: new Date().toISOString(),
+        closedAt: new Date().toISOString(),
+        status: 'closed',
+        teams: JSON.parse(JSON.stringify(teams)),
+        matches: JSON.parse(JSON.stringify(matches)),
+        standings: standings,
+      };
+
+      // บันทึกลง Supabase
+      await seasonsDb.create(newSeason);
+
+      // รีเซ็ตข้อมูลปัจจุบัน - ลบแมตช์ทั้งหมดจาก Supabase
       const currentMatches = await matchesDb.getAll();
       for (const match of currentMatches) {
         await matchesDb.delete(match.id);
       }
       setMatches([]);
+
+      // ปิดลีก
+      setLeagueStatus('closed');
+      localStorage.setItem('leagueStatus', 'closed');
+
+      // โหลด seasons ใหม่
+      await loadSeasons();
+
+      alert('ปิดลีกและบันทึกประวัติเรียบร้อย!\n\nสามารถเริ่มลีกใหม่ได้เลย');
+      
+      // ส่งสัญญาณให้หน้าอื่นอัพเดท
+      window.dispatchEvent(new Event('matchesUpdated'));
     } catch (error) {
-      console.error('Error clearing matches:', error);
+      console.error('Error closing season:', error);
+      alert('เกิดข้อผิดพลาดในการปิดลีก: ' + (error as Error).message);
     }
-
-    // ปิดลีก
-    setLeagueStatus('closed');
-    localStorage.setItem('leagueStatus', 'closed');
-
-    alert('ปิดลีกและบันทึกประวัติเรียบร้อย!\n\nสามารถเริ่มลีกใหม่ได้เลย');
-    
-    // ส่งสัญญาณให้หน้าอื่นอัพเดท
-    window.dispatchEvent(new Event('localStorageUpdated'));
   };
 
   const handleReopenSeason = async (seasonId: string) => {
@@ -478,30 +511,33 @@ function SeasonManager({ teams, matches, setTeams, setMatches, leagueStatus, set
       setLeagueStatus('open');
       localStorage.setItem('leagueStatus', 'open');
 
-      // ลบ season นี้ออกจากประวัติ
-      const updatedSeasons = seasons.filter(s => s.id !== seasonId);
-      localStorage.setItem('seasonHistory', JSON.stringify(updatedSeasons));
-      setSeasons(updatedSeasons);
+      // ลบ season นี้ออกจาก Supabase
+      await seasonsDb.delete(seasonId);
+      await loadSeasons();
 
-      alert('เปิดลีกเรียบร้อย! สามารถแก้ไขข้อมูลได้แล้ว');
+      alert('เปิดลีกเรียบร้อย!\n\nสามารถแก้ไขข้อมูลได้แล้ว');
       
       // ส่งสัญญาณให้หน้าอื่นอัพเดท
-      window.dispatchEvent(new Event('localStorageUpdated'));
+      window.dispatchEvent(new Event('matchesUpdated'));
     } catch (error) {
       console.error('Error reopening season:', error);
       alert('เกิดข้อผิดพลาดในการเปิดลีก: ' + (error as Error).message);
     }
   };
 
-  const handleDeleteSeason = (seasonId: string) => {
+  const handleDeleteSeason = async (seasonId: string) => {
     if (!confirm('คุณแน่ใจว่าต้องการลบประวัติลีกนี้?\n\nการกระทำนี้ไม่สามารถย้อนกลับได้')) {
       return;
     }
 
-    const updatedSeasons = seasons.filter(s => s.id !== seasonId);
-    localStorage.setItem('seasonHistory', JSON.stringify(updatedSeasons));
-    setSeasons(updatedSeasons);
-    alert('ลบประวัติลีกเรียบร้อย');
+    try {
+      await seasonsDb.delete(seasonId);
+      await loadSeasons();
+      alert('ลบประวัติลีกเรียบร้อย');
+    } catch (error) {
+      console.error('Error deleting season:', error);
+      alert('เกิดข้อผิดพลาดในการลบลีก: ' + (error as Error).message);
+    }
   };
 
   const formatThaiDate = (dateString: string) => {
@@ -1080,200 +1116,141 @@ function MatchesManager({ matches, setMatches, teams, isGenerating, setIsGenerat
       return;
     }
 
+    // คำนวณข้อมูลล่วงหน้า
+    const totalMatches = teams.length * (teams.length - 1) / 2;
+    const gamesPerTeam = teams.length - 1;
+    
     // ถามยืนยันก่อนสุ่มเสมอ
     const confirmMessage = matches.length > 0 
-      ? 'คุณต้องการสุ่มตารางแข่งขันใหม่ใช่ไหม? (แมตช์เดิมจะถูกลบทั้งหมด)'
-      : 'คุณต้องการสร้างตารางแข่งขันใหม่ใช่ไหม?';
+      ? `มีการแข่งขันอยู่แล้ว คุณต้องการสุ่มใหม่หรือไม่?\n(จะลบข้อมูลเดิมทั้งหมด)\n\nแมตช์ใหม่: ${totalMatches} แมตช์ | แต่ละทีม: ${gamesPerTeam} นัด`
+      : `สร้างตารางแข่งขัน Round Robin แบบสมบูรณ์\n${teams.length} ทีม | แต่ละทีม: ${gamesPerTeam} นัด | รวม: ${totalMatches} แมตช์\n\nดำเนินการต่อไหม?`;
     
-    if (!confirm(confirmMessage)) {
-      return;
-    }
+    if (!confirm(confirmMessage)) return;
 
-    // เริ่ม loading
     setIsGenerating(true);
-
+    
     try {
-      // เพิ่มความหน่วงเล็กน้อยให้เห็น animation
-      await new Promise(resolve => setTimeout(resolve, 500));
-      
-      // ลบแมตช์เก่าทั้งหมดก่อน (ถ้ามี)
-      console.log('Deleting all old matches...');
-      for (const match of matches) {
-        await matchesDb.delete(match.id);
+      // ลบแมทช์เดิมทั้งหมดก่อน
+      if (matches.length > 0) {
+        console.log('กำลังลบแมตช์เดิม...');
+        for (const match of matches) {
+          await matchesDb.delete(match.id);
+        }
       }
 
-      // เพิ่มความหน่วงเพื่อแสดง progress
-      await new Promise(resolve => setTimeout(resolve, 300));
+      // รอ 1.5 วินาทีเพื่อให้ loading ดูสวย
+      await new Promise(resolve => setTimeout(resolve, 1500));
 
-      // สร้างแมตช์แบบ Round Robin ที่จัดการทีมไม่ซ้ำในแต่ละนัด
-      const newMatches: Match[] = [];
       const teamList = teams.map(t => ({ id: t.id, name: t.name }));
       
-      // คำนวณจำนวนแมทช์ต่อรอบ
-      const numTeams = teamList.length;
-      const matchesPerRound = Math.floor(numTeams / 2); // จำนวนแมทช์ที่เล่นได้ในแต่ละนัด
-      const teamsPlayingPerRound = matchesPerRound * 2; // จำนวนทีมที่เล่นในแต่ละนัด
-      const teamsRestingPerRound = numTeams - teamsPlayingPerRound; // จำนวนทีมที่นั่งดูในแต่ละนัด
-      
-      console.log(`=== Round Robin Tournament ===`);
-      console.log(`จำนวนทีม: ${numTeams}`);
-      console.log(`แมทช์ต่อรอบ: ${matchesPerRound}`);
-      console.log(`ทีมที่เล่นต่อรอบ: ${teamsPlayingPerRound}`);
-      console.log(`ทีมที่นั่งดูต่อรอบ: ${teamsRestingPerRound}`);
-      console.log('===============================');
-
-      // คำนวณจำนวนรอบ - สำหรับ Round Robin ทุกทีมต้องเล่นกับทุกทีม
-      // สำหรับ n ทีม จะมี n-1 รอบ (เพราะแต่ละทีมต้องเล่นกับ n-1 ทีมอื่น)
-      const totalRounds = numTeams - 1;
-
-      // ใช้อัลกอริทึมเรียบง่าย: สร้างคู่แข่งขันทั้งหมด แล้วแบ่งตามรอบอย่างสมเหตุผล
-      console.log('สร้างคู่แข่งขันทั้งหมดก่อน...');
-      const allPairs: { home: { id: string, name: string }, away: { id: string, name: string } }[] = [];
-      
-      // สร้างคู่แข่งขันทั้งหมด (n*(n-1)/2 คู่)
+      // สร้างทุกคู่การแข่งขันที่เป็นไปได้
+      const allFixtures: { home: { id: string, name: string }, away: { id: string, name: string } }[] = [];
       for (let i = 0; i < teamList.length; i++) {
         for (let j = i + 1; j < teamList.length; j++) {
+          // สุ่มใครเป็น Home/Away ในแต่ละคู่
           const isHomeFirst = Math.random() < 0.5;
-          allPairs.push({
+          allFixtures.push({
             home: isHomeFirst ? teamList[i] : teamList[j],
             away: isHomeFirst ? teamList[j] : teamList[i]
           });
         }
       }
       
-      console.log(`สร้างคู่แข่งขันทั้งหมด: ${allPairs.length} คู่`);
-      console.log(`จำนวนแมทช์ต่อรอบ: ${matchesPerRound}`);
-      console.log(`จำนวนรอบที่ต้องการ: ${Math.ceil(allPairs.length / matchesPerRound)}`);
+      // สุ่มลำดับแมตช์ทั้งหมดใหม่ (Fisher-Yates Shuffle)
+      const shuffledFixtures = [...allFixtures];
+      for (let i = shuffledFixtures.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [shuffledFixtures[i], shuffledFixtures[j]] = [shuffledFixtures[j], shuffledFixtures[i]];
+      }
       
-      // แบ่งคู่แข่งขันเป็นรอบๆ โดยให้แต่ละรอบมีจำนวนแมทช์คงที่และไม่มีทีมซ้ำ
+      // แบ่งแมตช์เป็นนัดๆ (ทีมไม่ซ้ำในแต่ละนัด)
+      const maxMatchesPerRound = Math.floor(teamList.length / 2);
+      const newMatches: Match[] = [];
       let currentRound = 1;
-      let pairIndex = 0;
+      let fixtureIndex = 0;
+      let matchCounter = 0;
       
-      while (pairIndex < allPairs.length) {
-        console.log(`\n--- สร้างรอบที่ ${currentRound} ---`);
-        const roundPairs: typeof allPairs = [];
-        const usedTeamsInRound = new Set<string>();
+      while (fixtureIndex < shuffledFixtures.length) {
+        const usedTeams = new Set<string>();
+        const roundMatches: typeof shuffledFixtures = [];
         
-        // เลือกคู่แข่งขันสำหรับรอบนี้ โดยทีมไม่ซ้ำ
-        for (let i = pairIndex; i < allPairs.length && roundPairs.length < matchesPerRound; i++) {
-          const pair = allPairs[i];
+        // เลือกแมตช์ที่ทีมไม่ซ้ำสำหรับนัดนี้
+        for (let i = fixtureIndex; i < shuffledFixtures.length && roundMatches.length < maxMatchesPerRound; i++) {
+          const fixture = shuffledFixtures[i];
           
-          // เช็คว่าทั้งสองทีมยังไม่ได้เล่นในรอบนี้
-          if (!usedTeamsInRound.has(pair.home.id) && !usedTeamsInRound.has(pair.away.id)) {
-            roundPairs.push(pair);
-            usedTeamsInRound.add(pair.home.id);
-            usedTeamsInRound.add(pair.away.id);
+          if (!usedTeams.has(fixture.home.id) && !usedTeams.has(fixture.away.id)) {
+            roundMatches.push(fixture);
+            usedTeams.add(fixture.home.id);
+            usedTeams.add(fixture.away.id);
             
-            // ย้ายคู่นี้ไปด้านหน้า
-            [allPairs[pairIndex], allPairs[i]] = [allPairs[i], allPairs[pairIndex]];
-            pairIndex++;
-            
-            console.log(`  แมทช์ ${roundPairs.length}: ${pair.home.name} vs ${pair.away.name}`);
+            // ย้ายแมตช์นี้มาด้านหน้า
+            [shuffledFixtures[fixtureIndex], shuffledFixtures[i]] = [shuffledFixtures[i], shuffledFixtures[fixtureIndex]];
+            fixtureIndex++;
           }
         }
         
-        // ถ้าไม่มีคู่ที่เหลือให้เล่นในรอบนี้ ข้ามไปรอบต่อไป
-        if (roundPairs.length === 0) {
-          console.log('ไม่มีคู่แข่งขันที่เหลือ');
-          break;
-        }
-        
-        // สร้างแมทช์จากคู่ในรอบนี้
-        roundPairs.forEach((pair, matchIdx) => {
-          const venue = (newMatches.length % 2 === 0) ? 'สนาม 1' : 'สนาม 2';
+        // สร้างแมตช์จากคู่ในนัดนี้
+        roundMatches.forEach((fixture, index) => {
+          // สลับสนาม: 1, 2, 1, 2, 1, 2...
+          const venue = (matchCounter % 2 === 0) ? 'สนาม 1' : 'สนาม 2';
           
           const match: Match = {
-            id: `match-${Date.now()}-${currentRound}-${matchIdx}`,
-            homeTeam: pair.home.id,
-            awayTeam: pair.away.id,
-            homeTeamName: pair.home.name,
-            awayTeamName: pair.away.name,
+            id: `match-${Date.now()}-${currentRound}-${index}-${Math.random().toString(36).substr(2, 9)}`,
+            homeTeam: fixture.home.id,
+            awayTeam: fixture.away.id,
+            homeTeamName: fixture.home.name,
+            awayTeamName: fixture.away.name,
             venue: venue,
             status: 'scheduled',
             round: currentRound,
-            matchOrder: newMatches.length,
+            matchOrder: matchCounter,
           };
           
           newMatches.push(match);
+          matchCounter++;
         });
-        
-        console.log(`รอบที่ ${currentRound}: สร้าง ${roundPairs.length} แมทช์`);
-        console.log(`ทีมที่เล่น: ${Array.from(usedTeamsInRound).map(id => teamList.find(t => t.id === id)?.name).join(', ')}`);
-        
-        // แสดงทีมที่นั่งดู
-        const restingTeams = teamList.filter(team => !usedTeamsInRound.has(team.id));
-        if (restingTeams.length > 0) {
-          console.log(`ทีมที่นั่งดู: ${restingTeams.map(t => t.name).join(', ')}`);
-        }
         
         currentRound++;
       }
-
-      console.log(`Creating ${newMatches.length} new matches...`);
       
-      // Debug: แสดงสรุปการจัดสนามและตรวจสอบทีมซ้ำ
+      // คำนวณข้อมูลสรุป
       const venue1Count = newMatches.filter(m => m.venue === 'สนาม 1').length;
       const venue2Count = newMatches.filter(m => m.venue === 'สนาม 2').length;
-      console.log(`\n=== สรุปการจัดสนาม ===`);
-      console.log(`สนาม 1: ${venue1Count} แมทช์`);
-      console.log(`สนาม 2: ${venue2Count} แมทช์`);
-      
-      // ตรวจสอบทีมซ้ำในแต่ละนัด
-      const rounds = Math.max(...newMatches.map(m => m.round || 1));
-      console.log(`\n=== ตรวจสอบทีมซ้ำในแต่ละนัด ===`);
-      for (let r = 1; r <= rounds; r++) {
-        const roundMatches = newMatches.filter(m => m.round === r);
-        const allTeamsInRound: string[] = [];
-        
-        roundMatches.forEach(match => {
-          allTeamsInRound.push(match.homeTeamName, match.awayTeamName);
-        });
-        
-        const uniqueTeams = new Set(allTeamsInRound);
-        const hasDuplicates = allTeamsInRound.length !== uniqueTeams.size;
-        
-        console.log(`รอบที่ ${r}: ${roundMatches.length} แมทช์`);
-        console.log(`  ทีมทั้งหมด: ${allTeamsInRound.join(', ')}`);
-        console.log(`  ทีมไม่ซ้ำ: ${uniqueTeams.size}/${allTeamsInRound.length} ${hasDuplicates ? '❌ มีทีมซ้ำ!' : '✅ ไม่มีทีมซ้ำ'}`);
-      }
-      
-      // แสดง pattern สนาม 10 แมทช์แรก
-      console.log('\n=== Pattern สนาม 10 แมทช์แรก ===');
-      newMatches.slice(0, 10).forEach((match, idx) => {
-        console.log(`  ${idx + 1}. ${match.venue}: ${match.homeTeamName} vs ${match.awayTeamName}`);
-      });
-      console.log('=====================================');
-      
-      // สร้างแมตช์ใหม่ใน Supabase
+      const totalRounds = Math.max(...newMatches.map(m => m.round || 1));
+
+      // บันทึกแมทช์ทั้งหมดลง database
       const createdMatches: Match[] = [];
-      for (const match of newMatches) {
-        const createdMatch = await matchesDb.create(match);
+      for (const matchData of newMatches) {
+        const createdMatch = await matchesDb.create(matchData);
         createdMatches.push(createdMatch);
       }
-      
-      console.log('Created matches successfully:', createdMatches.length);
-      
-      // โหลดข้อมูลใหม่จาก Supabase
+
+      // อัพเดต state
       const freshMatches = await matchesDb.getAll();
       setMatches(freshMatches);
       
-      const maxRounds = Math.max(...createdMatches.map(m => m.round || 1));
-      const avgMatchesPerRound = Math.ceil(createdMatches.length / maxRounds);
-      alert(`สร้างตารางแข่งขันสำเร็จ! 🎲\n` +
-            `ทั้งหมด ${createdMatches.length} แมตช์\n` +
-            `แบ่งเป็น ${maxRounds} รอบ (เฉลี่ย ${avgMatchesPerRound} แมทช์ต่อรอบ)\n` +
-            `🏟️ สนาม: 1-2-1-2-1-2... ตามลำดับแน่นอน\n` +
-            `🎯 ทีม: แต่ละนัดไม่มีทีมซ้ำ (Round Robin Algorithm)\n` +
-            `✅ ระบบป้องกันทีมซ้ำในแต่ละนัดแล้ว`);
+      // แสดงผลลัพธ์สุดท้าย
+      alert(`🏆 สร้างตารางแข่งขัน Round Robin สำเร็จ!\n\n` +
+            `📊 รายละเอียด:\n` +
+            `• ${teams.length} ทีม - แต่ละทีมเล่น ${gamesPerTeam} นัด\n` +
+            `• รวม ${createdMatches.length} แมตช์\n` +
+            `• แบ่งเป็น ${totalRounds} นัด\n\n` +
+            `🏟️ สนาม:\n` +
+            `• สนาม 1: ${venue1Count} แมตช์\n` +
+            `• สนาม 2: ${venue2Count} แมตช์\n\n` +
+            `� ฟีเจอร์:\n` +
+            `• สุ่มทั้ง Home/Away และลำดับแมตช์\n` +
+            `• สลับสนาม 1-2-1-2 สม่ำเสมอ\n` +
+            `• ไม่มีทีมซ้ำในแต่ละนัด\n` +
+            `• True Round Robin (ทุกทีมเจอทุกทีม)`);
       
       // ส่งสัญญาณให้หน้าอื่นอัพเดท
-      window.dispatchEvent(new Event('localStorageUpdated'));
+      window.dispatchEvent(new Event('matchesUpdated'));
       
     } catch (error) {
       console.error('Error generating matches:', error);
       alert('เกิดข้อผิดพลาดในการสร้างตารางแข่งขัน: ' + (error as Error).message);
     } finally {
-      // หยุด loading
       setIsGenerating(false);
     }
   };

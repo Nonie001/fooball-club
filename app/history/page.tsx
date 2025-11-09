@@ -2,9 +2,9 @@
 
 import { useState, useEffect } from 'react';
 import Navigation from '@/components/Navigation';
-import { matchesDb, teamsDb } from '@/lib/database/operations';
-import { Match, Team } from '@/lib/types';
-import { Trophy, Medal, Award, Calendar, Eye, TrendingUp, Users, Target, BarChart3, Clock, MapPin } from 'lucide-react';
+import { matchesDb, teamsDb, seasonsDb } from '@/lib/database/operations';
+import { Match, Team, Season } from '@/lib/types';
+import { Trophy, Medal, Award, Calendar, Eye, TrendingUp, Users, Target, BarChart3, Clock, MapPin, Archive } from 'lucide-react';
 
 interface TeamStats {
   id: string;
@@ -29,26 +29,28 @@ interface RoundSummary {
 export default function HistoryPage() {
   const [finishedMatches, setFinishedMatches] = useState<Match[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
+  const [seasons, setSeasons] = useState<Season[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedRound, setSelectedRound] = useState<number | null>(null);
-  const [filterBy, setFilterBy] = useState<'all' | 'rounds' | 'teams'>('all');
+  const [selectedSeason, setSelectedSeason] = useState<string | 'current'>('current');
+  const [filterBy, setFilterBy] = useState<'all' | 'rounds' | 'teams' | 'seasons'>('all');
 
   // โหลดข้อมูลจาก Supabase
   useEffect(() => {
     const loadData = async () => {
       try {
         setLoading(true);
-        const [matchesData, teamsData] = await Promise.all([
+        const [matchesData, teamsData, seasonsData] = await Promise.all([
           matchesDb.getAll(),
-          teamsDb.getAll()
+          teamsDb.getAll(),
+          seasonsDb.getAll()
         ]);
 
-        // กรองเฉพาะแมทช์ที่จบแล้ว
+        // กรองเฉพาะแมทช์ที่จบแล้ว (ลีกปัจจุบัน)
         const finished = matchesData.filter(match => match.status === 'finished');
         setFinishedMatches(finished);
         setTeams(teamsData);
-        console.log('Loaded finished matches:', finished);
-        console.log('Loaded teams:', teamsData);
+        setSeasons(seasonsData);
       } catch (error) {
         console.error('Error loading data:', error);
       } finally {
@@ -153,6 +155,24 @@ export default function HistoryPage() {
   const totalGoals = finishedMatches.reduce((sum, match) => 
     sum + (match.homeScore || 0) + (match.awayScore || 0), 0);
 
+  // ข้อมูลที่จะแสดง (ลีกปัจจุบันหรือลีกเก่า)
+  const displayData = selectedSeason === 'current' 
+    ? { matches: finishedMatches, teams: teamStats, hasData: finishedMatches.length > 0 }
+    : (() => {
+        const season = seasons.find(s => s.id === selectedSeason);
+        if (!season) return { matches: [], teams: [], hasData: false };
+        return { 
+          matches: season.matches.filter(m => m.status === 'finished'), 
+          teams: season.standings || [],
+          hasData: true
+        };
+      })();
+
+  const displayMatches = displayData.matches;
+  const displayTeams = displayData.teams;
+  const displayTotalGoals = displayMatches.reduce((sum, match) => 
+    sum + (match.homeScore || 0) + (match.awayScore || 0), 0);
+
   // แปลงวันที่เป็นภาษาไทย
   const formatThaiDate = (dateString: string) => {
     const date = new Date(dateString);
@@ -187,15 +207,55 @@ export default function HistoryPage() {
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Header */}
         <div className="mb-8">
-          <h2 className="text-2xl sm:text-3xl font-bold text-zinc-900 dark:text-white mb-2">
-            ประวัติการแข่งขัน
-          </h2>
+          <div className="flex items-center gap-3 mb-2">
+            <Clock className="w-8 h-8 text-blue-600" />
+            <h2 className="text-2xl sm:text-3xl font-bold text-zinc-900 dark:text-white">
+              ประวัติการแข่งขัน
+            </h2>
+          </div>
           <p className="text-sm sm:text-base text-zinc-600 dark:text-zinc-400">
-            สถิติและผลการแข่งขันที่จบไปแล้ว ({finishedMatches.length} แมทช์)
+            ข้อมูลสถิติและผลการแข่งขันทั้งหมด ({finishedMatches.length + seasons.reduce((sum, s) => sum + s.matches.filter(m => m.status === 'finished').length, 0)} แมทช์)
           </p>
         </div>
 
-        {finishedMatches.length === 0 ? (
+        {/* Season Selector */}
+        {(finishedMatches.length > 0 || seasons.length > 0) && (
+          <div className="mb-6 bg-white dark:bg-zinc-900 rounded-xl p-4 border border-zinc-200 dark:border-zinc-800">
+            <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-3">
+              <Calendar className="w-4 h-4 inline mr-1" />
+              เลือกลีก/ซีซัน
+            </label>
+            <div className="flex flex-wrap gap-2">
+              <button
+                onClick={() => setSelectedSeason('current')}
+                className={`px-4 py-2 rounded-lg font-medium text-sm transition-colors flex items-center gap-2 ${
+                  selectedSeason === 'current'
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-200 dark:hover:bg-zinc-700'
+                }`}
+              >
+                <Trophy className="w-4 h-4" />
+                ลีกปัจจุบัน ({finishedMatches.length})
+              </button>
+              {seasons.map((season) => (
+                <button
+                  key={season.id}
+                  onClick={() => setSelectedSeason(season.id)}
+                  className={`px-4 py-2 rounded-lg font-medium text-sm transition-colors flex items-center gap-2 ${
+                    selectedSeason === season.id
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-200 dark:hover:bg-zinc-700'
+                  }`}
+                >
+                  <Archive className="w-4 h-4" />
+                  {season.name}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {!displayData.hasData ? (
           <div className="bg-white dark:bg-zinc-900 rounded-xl p-12 text-center border border-zinc-200 dark:border-zinc-800">
             <Calendar className="w-16 h-16 text-zinc-400 mx-auto mb-4" />
             <p className="text-lg text-zinc-500 dark:text-zinc-400 mb-2">
@@ -208,43 +268,51 @@ export default function HistoryPage() {
         ) : (
           <>
             {/* Overview Stats */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-              <div className="bg-white dark:bg-zinc-900 rounded-xl p-4 border border-zinc-200 dark:border-zinc-800">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+              <div className="bg-white dark:bg-zinc-900 rounded-xl p-5 border border-zinc-200 dark:border-zinc-800">
                 <div className="flex items-center gap-3">
-                  <Target className="w-8 h-8 text-blue-600" />
+                  <div className="p-2 bg-blue-100 dark:bg-blue-900/20 rounded-lg">
+                    <Target className="w-6 h-6 text-blue-600 dark:text-blue-400" />
+                  </div>
                   <div>
-                    <p className="text-2xl font-bold text-zinc-900 dark:text-white">{finishedMatches.length}</p>
+                    <p className="text-2xl font-bold text-zinc-900 dark:text-white">{displayMatches.length}</p>
                     <p className="text-xs text-zinc-600 dark:text-zinc-400">แมทช์ที่จบแล้ว</p>
                   </div>
                 </div>
               </div>
               
-              <div className="bg-white dark:bg-zinc-900 rounded-xl p-4 border border-zinc-200 dark:border-zinc-800">
+              <div className="bg-white dark:bg-zinc-900 rounded-xl p-5 border border-zinc-200 dark:border-zinc-800">
                 <div className="flex items-center gap-3">
-                  <BarChart3 className="w-8 h-8 text-green-600" />
+                  <div className="p-2 bg-green-100 dark:bg-green-900/20 rounded-lg">
+                    <BarChart3 className="w-6 h-6 text-green-600 dark:text-green-400" />
+                  </div>
                   <div>
-                    <p className="text-2xl font-bold text-zinc-900 dark:text-white">{totalGoals}</p>
+                    <p className="text-2xl font-bold text-zinc-900 dark:text-white">{displayTotalGoals}</p>
                     <p className="text-xs text-zinc-600 dark:text-zinc-400">ประตูทั้งหมด</p>
                   </div>
                 </div>
               </div>
 
-              <div className="bg-white dark:bg-zinc-900 rounded-xl p-4 border border-zinc-200 dark:border-zinc-800">
+              <div className="bg-white dark:bg-zinc-900 rounded-xl p-5 border border-zinc-200 dark:border-zinc-800">
                 <div className="flex items-center gap-3">
-                  <Users className="w-8 h-8 text-purple-600" />
+                  <div className="p-2 bg-purple-100 dark:bg-purple-900/20 rounded-lg">
+                    <Users className="w-6 h-6 text-purple-600 dark:text-purple-400" />
+                  </div>
                   <div>
-                    <p className="text-2xl font-bold text-zinc-900 dark:text-white">{teamStats.length}</p>
+                    <p className="text-2xl font-bold text-zinc-900 dark:text-white">{displayTeams.length}</p>
                     <p className="text-xs text-zinc-600 dark:text-zinc-400">ทีมที่เล่นแล้ว</p>
                   </div>
                 </div>
               </div>
 
-              <div className="bg-white dark:bg-zinc-900 rounded-xl p-4 border border-zinc-200 dark:border-zinc-800">
+              <div className="bg-white dark:bg-zinc-900 rounded-xl p-5 border border-zinc-200 dark:border-zinc-800">
                 <div className="flex items-center gap-3">
-                  <TrendingUp className="w-8 h-8 text-orange-600" />
+                  <div className="p-2 bg-orange-100 dark:bg-orange-900/20 rounded-lg">
+                    <TrendingUp className="w-6 h-6 text-orange-600 dark:text-orange-400" />
+                  </div>
                   <div>
                     <p className="text-2xl font-bold text-zinc-900 dark:text-white">
-                      {finishedMatches.length > 0 ? (totalGoals / finishedMatches.length).toFixed(1) : '0'}
+                      {displayMatches.length > 0 ? (displayTotalGoals / displayMatches.length).toFixed(1) : '0'}
                     </p>
                     <p className="text-xs text-zinc-600 dark:text-zinc-400">ประตู/แมทช์</p>
                   </div>
@@ -259,17 +327,17 @@ export default function HistoryPage() {
                 className={`px-4 py-2 rounded-lg font-medium text-sm transition-colors ${
                   filterBy === 'all'
                     ? 'bg-blue-600 text-white'
-                    : 'bg-white dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700'
+                    : 'bg-white dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-700'
                 }`}
               >
-                ทั้งหมด
+                ภาพรวม
               </button>
               <button
                 onClick={() => setFilterBy('teams')}
                 className={`px-4 py-2 rounded-lg font-medium text-sm transition-colors ${
                   filterBy === 'teams'
                     ? 'bg-blue-600 text-white'
-                    : 'bg-white dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700'
+                    : 'bg-white dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-700'
                 }`}
               >
                 ตารางคะแนน
@@ -279,7 +347,7 @@ export default function HistoryPage() {
                 className={`px-4 py-2 rounded-lg font-medium text-sm transition-colors ${
                   filterBy === 'rounds'
                     ? 'bg-blue-600 text-white'
-                    : 'bg-white dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700'
+                    : 'bg-white dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-700'
                 }`}
               >
                 ตามนัด
@@ -290,9 +358,12 @@ export default function HistoryPage() {
             {filterBy === 'teams' && (
               <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 overflow-hidden">
                 <div className="px-6 py-4 border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-800">
-                  <h3 className="text-xl font-semibold text-zinc-900 dark:text-white">ตารางคะแนน</h3>
+                  <div className="flex items-center gap-2">
+                    <Trophy className="w-5 h-5 text-blue-600" />
+                    <h3 className="text-xl font-semibold text-zinc-900 dark:text-white">ตารางคะแนน</h3>
+                  </div>
                   <p className="text-sm text-zinc-600 dark:text-zinc-400 mt-1">
-                    จากแมทช์ที่จบแล้ว {finishedMatches.length} แมทช์
+                    จากแมทช์ที่จบแล้ว {displayMatches.length} แมทช์
                   </p>
                 </div>
                 
@@ -313,7 +384,7 @@ export default function HistoryPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {teamStats.map((team, index) => {
+                      {displayTeams.map((team, index) => {
                         const position = index + 1;
                         let positionColorClass = '';
                         let PositionIcon = null;
@@ -365,67 +436,94 @@ export default function HistoryPage() {
 
             {filterBy === 'rounds' && (
               <div className="space-y-6">
-                {roundSummary.map((round) => (
-                  <div key={round.round} className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 overflow-hidden">
-                    <div className="px-6 py-4 border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-800">
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <h3 className="text-xl font-semibold text-zinc-900 dark:text-white">
-                            นัดที่ {round.round}
-                          </h3>
-                          <p className="text-sm text-zinc-600 dark:text-zinc-400">
-                            {round.finishedMatches} แมทช์ • {round.totalGoals} ประตู
-                          </p>
-                        </div>
-                        <button
-                          onClick={() => setSelectedRound(selectedRound === round.round ? null : round.round)}
-                          className="flex items-center gap-2 px-3 py-1.5 bg-blue-100 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 rounded-lg text-sm font-medium hover:bg-blue-200 dark:hover:bg-blue-900/30 transition-colors"
-                        >
-                          <Eye className="w-4 h-4" />
-                          {selectedRound === round.round ? 'ซ่อน' : 'ดู'}
-                        </button>
-                      </div>
-                    </div>
+                {(() => {
+                  const rounds: {[key: number]: { round: number, matches: Match[] }} = {};
+                  displayMatches.forEach(match => {
+                    const round = match.round || 1;
+                    if (!rounds[round]) {
+                      rounds[round] = { round, matches: [] };
+                    }
+                    rounds[round].matches.push(match);
+                  });
+
+                  return Object.values(rounds).sort((a, b) => a.round - b.round).map((round) => {
+                    const totalGoals = round.matches.reduce((sum, m) => sum + (m.homeScore || 0) + (m.awayScore || 0), 0);
                     
-                    {selectedRound === round.round && (
-                      <div className="p-6">
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                          {round.matches.map(match => (
-                            <div key={match.id} className="bg-zinc-50 dark:bg-zinc-800 rounded-lg p-4">
-                              <div className="flex items-center justify-between mb-2">
-                                <div className="flex-1 text-right">
-                                  <span className="font-medium text-zinc-900 dark:text-white">
-                                    {teams.find(t => t.id === match.homeTeam)?.name}
-                                  </span>
-                                </div>
-                                <div className="px-4 flex items-center gap-2">
-                                  <span className="text-xl font-bold text-zinc-900 dark:text-white">
-                                    {match.homeScore}
-                                  </span>
-                                  <span className="text-zinc-400">-</span>
-                                  <span className="text-xl font-bold text-zinc-900 dark:text-white">
-                                    {match.awayScore}
-                                  </span>
-                                </div>
-                                <div className="flex-1 text-left">
-                                  <span className="font-medium text-zinc-900 dark:text-white">
-                                    {teams.find(t => t.id === match.awayTeam)?.name}
-                                  </span>
-                                </div>
+                    return (
+                      <div key={round.round} className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 overflow-hidden">
+                        <div className="px-6 py-4 border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-800">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <Calendar className="w-5 h-5 text-blue-600" />
+                              <div>
+                                <h3 className="text-xl font-semibold text-zinc-900 dark:text-white">
+                                  นัดที่ {round.round}
+                                </h3>
+                                <p className="text-sm text-zinc-600 dark:text-zinc-400">
+                                  {round.matches.length} แมทช์ • {totalGoals} ประตู
+                                </p>
                               </div>
-                              {match.venue && (
-                                <div className="flex items-center justify-center gap-1 text-xs text-zinc-500 dark:text-zinc-400">
-                                  <MapPin className="w-3 h-3" />
-                                  <span>{match.venue}</span>
-                                </div>
-                              )}
                             </div>
-                          ))}
+                            <button
+                              onClick={() => setSelectedRound(selectedRound === round.round ? null : round.round)}
+                              className="flex items-center gap-2 px-3 py-1.5 bg-blue-100 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 rounded-lg text-sm font-medium hover:bg-blue-200 dark:hover:bg-blue-900/30 transition-colors"
+                            >
+                              <Eye className="w-4 h-4" />
+                              {selectedRound === round.round ? 'ซ่อน' : 'ดู'}
+                            </button>
+                          </div>
                         </div>
+                        
+                        {selectedRound === round.round && (
+                          <div className="p-6">
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                              {round.matches.map(match => {
+                                const homeTeamName = selectedSeason === 'current' 
+                                  ? teams.find(t => t.id === match.homeTeam)?.name
+                                  : match.homeTeamName;
+                                const awayTeamName = selectedSeason === 'current'
+                                  ? teams.find(t => t.id === match.awayTeam)?.name
+                                  : match.awayTeamName;
+                                
+                                return (
+                                  <div key={match.id} className="bg-zinc-50 dark:bg-zinc-800 rounded-lg p-4">
+                                    <div className="flex items-center justify-between mb-2">
+                                      <div className="flex-1 text-right">
+                                        <span className="font-medium text-zinc-900 dark:text-white">
+                                          {homeTeamName}
+                                        </span>
+                                      </div>
+                                      <div className="px-4 flex items-center gap-2">
+                                        <span className="text-xl font-bold text-zinc-900 dark:text-white">
+                                          {match.homeScore}
+                                        </span>
+                                        <span className="text-zinc-400">-</span>
+                                        <span className="text-xl font-bold text-zinc-900 dark:text-white">
+                                          {match.awayScore}
+                                        </span>
+                                      </div>
+                                      <div className="flex-1 text-left">
+                                        <span className="font-medium text-zinc-900 dark:text-white">
+                                          {awayTeamName}
+                                        </span>
+                                      </div>
+                                    </div>
+                                    {match.venue && (
+                                      <div className="flex items-center justify-center gap-1 text-xs text-zinc-500 dark:text-zinc-400">
+                                        <MapPin className="w-3 h-3" />
+                                        <span>{match.venue}</span>
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
                       </div>
-                    )}
-                  </div>
-                ))}
+                    );
+                  });
+                })()}
               </div>
             )}
 
@@ -434,14 +532,17 @@ export default function HistoryPage() {
                 {/* Team Statistics */}
                 <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 overflow-hidden">
                   <div className="px-6 py-4 border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-800">
-                    <h3 className="text-xl font-semibold text-zinc-900 dark:text-white">อันดับปัจจุบัน</h3>
+                    <div className="flex items-center gap-2">
+                      <Trophy className="w-5 h-5 text-blue-600" />
+                      <h3 className="text-xl font-semibold text-zinc-900 dark:text-white">อันดับปัจจุบัน</h3>
+                    </div>
                     <p className="text-sm text-zinc-600 dark:text-zinc-400 mt-1">
                       Top 5 ทีม
                     </p>
                   </div>
                   
                   <div className="p-6 space-y-3">
-                    {teamStats.slice(0, 5).map((team, index) => (
+                    {displayTeams.slice(0, 5).map((team, index) => (
                       <div key={team.id} className="flex items-center justify-between p-3 bg-zinc-50 dark:bg-zinc-800 rounded-lg">
                         <div className="flex items-center gap-3">
                           <span className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold ${
@@ -470,42 +571,54 @@ export default function HistoryPage() {
                 {/* Recent Matches */}
                 <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 overflow-hidden">
                   <div className="px-6 py-4 border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-800">
-                    <h3 className="text-xl font-semibold text-zinc-900 dark:text-white">แมทช์ล่าสุด</h3>
+                    <div className="flex items-center gap-2">
+                      <Clock className="w-5 h-5 text-blue-600" />
+                      <h3 className="text-xl font-semibold text-zinc-900 dark:text-white">แมทช์ล่าสุด</h3>
+                    </div>
                     <p className="text-sm text-zinc-600 dark:text-zinc-400 mt-1">
                       5 แมทช์ที่ผ่านมา
                     </p>
                   </div>
                   
                   <div className="p-6 space-y-3">
-                    {finishedMatches.slice(-5).reverse().map(match => (
-                      <div key={match.id} className="p-3 bg-zinc-50 dark:bg-zinc-800 rounded-lg">
-                        <div className="flex items-center justify-between">
-                          <div className="flex-1 text-right">
-                            <span className="text-sm font-medium text-zinc-900 dark:text-white">
-                              {teams.find(t => t.id === match.homeTeam)?.name}
-                            </span>
+                    {displayMatches.slice(-5).reverse().map(match => {
+                      const homeTeamName = selectedSeason === 'current' 
+                        ? teams.find(t => t.id === match.homeTeam)?.name
+                        : match.homeTeamName;
+                      const awayTeamName = selectedSeason === 'current'
+                        ? teams.find(t => t.id === match.awayTeam)?.name
+                        : match.awayTeamName;
+                      
+                      return (
+                        <div key={match.id} className="p-3 bg-zinc-50 dark:bg-zinc-800 rounded-lg">
+                          <div className="flex items-center justify-between">
+                            <div className="flex-1 text-right">
+                              <span className="text-sm font-medium text-zinc-900 dark:text-white">
+                                {homeTeamName}
+                              </span>
+                            </div>
+                            <div className="px-4 flex items-center gap-2">
+                              <span className="font-bold text-zinc-900 dark:text-white">
+                                {match.homeScore}
+                              </span>
+                              <span className="text-zinc-400">-</span>
+                              <span className="font-bold text-zinc-900 dark:text-white">
+                                {match.awayScore}
+                              </span>
+                            </div>
+                            <div className="flex-1 text-left">
+                              <span className="text-sm font-medium text-zinc-900 dark:text-white">
+                                {awayTeamName}
+                              </span>
+                            </div>
                           </div>
-                          <div className="px-4 flex items-center gap-2">
-                            <span className="font-bold text-zinc-900 dark:text-white">
-                              {match.homeScore}
-                            </span>
-                            <span className="text-zinc-400">-</span>
-                            <span className="font-bold text-zinc-900 dark:text-white">
-                              {match.awayScore}
-                            </span>
-                          </div>
-                          <div className="flex-1 text-left">
-                            <span className="text-sm font-medium text-zinc-900 dark:text-white">
-                              {teams.find(t => t.id === match.awayTeam)?.name}
-                            </span>
+                          <div className="flex items-center justify-between mt-2 text-xs text-zinc-500 dark:text-zinc-400">
+                            <span>นัดที่ {match.round}</span>
+                            <span>{match.venue}</span>
                           </div>
                         </div>
-                        <div className="flex items-center justify-between mt-2 text-xs text-zinc-500 dark:text-zinc-400">
-                          <span>นัดที่ {match.round}</span>
-                          <span>{match.venue}</span>
-                        </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               </div>

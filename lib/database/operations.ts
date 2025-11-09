@@ -1,9 +1,21 @@
 import { supabase } from '@/lib/supabase'
 import { Team, Match, Season } from '@/lib/types'
 
+// Check if Supabase is properly configured
+const isSupabaseConfigured = () => {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  return url && key && !url.includes('placeholder') && !key.includes('placeholder');
+};
+
 // Teams operations
 export const teamsDb = {
   async getAll(): Promise<Team[]> {
+    if (!isSupabaseConfigured()) {
+      console.warn('Supabase not configured, returning empty array');
+      return [];
+    }
+
     const { data, error } = await supabase
       .from('teams')
       .select('*')
@@ -27,6 +39,10 @@ export const teamsDb = {
   },
 
   async create(team: Omit<Team, 'id'>): Promise<Team> {
+    if (!isSupabaseConfigured()) {
+      throw new Error('Supabase not configured');
+    }
+
     const { data, error } = await supabase
       .from('teams')
       .insert([{
@@ -62,6 +78,10 @@ export const teamsDb = {
   },
 
   async update(id: string, updates: Partial<Team>): Promise<Team> {
+    if (!isSupabaseConfigured()) {
+      throw new Error('Supabase not configured');
+    }
+
     const dbUpdates: any = {}
     if (updates.name) dbUpdates.name = updates.name
     if (updates.logo) dbUpdates.logo = updates.logo
@@ -100,6 +120,10 @@ export const teamsDb = {
   },
 
   async delete(id: string): Promise<void> {
+    if (!isSupabaseConfigured()) {
+      throw new Error('Supabase not configured');
+    }
+
     const { error } = await supabase
       .from('teams')
       .delete()
@@ -112,6 +136,10 @@ export const teamsDb = {
 // Matches operations
 export const matchesDb = {
   async getAll(): Promise<Match[]> {
+    if (!isSupabaseConfigured()) {
+      console.warn('Supabase not configured, returning empty array');
+      return [];
+    }
     const { data, error } = await supabase
       .from('matches')
       .select('*')
@@ -138,6 +166,10 @@ export const matchesDb = {
   },
 
   async create(match: Omit<Match, 'id'>): Promise<Match> {
+    if (!isSupabaseConfigured()) {
+      throw new Error('Supabase not configured');
+    }
+
     const { data, error } = await supabase
       .from('matches')
       .insert([{
@@ -177,6 +209,10 @@ export const matchesDb = {
   },
 
   async update(id: string, updates: Partial<Match>): Promise<Match> {
+    if (!isSupabaseConfigured()) {
+      throw new Error('Supabase not configured');
+    }
+
     const dbUpdates: any = { updated_at: new Date().toISOString() }
     
     // เช็คค่า undefined อย่างระมัดระวัง
@@ -225,6 +261,10 @@ export const matchesDb = {
   },
 
   async delete(id: string): Promise<void> {
+    if (!isSupabaseConfigured()) {
+      throw new Error('Supabase not configured');
+    }
+
     const { error } = await supabase
       .from('matches')
       .delete()
